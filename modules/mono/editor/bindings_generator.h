@@ -33,11 +33,10 @@
 
 #include "core/class_db.h"
 #include "core/string_builder.h"
-#include "dotnet_solution.h"
 #include "editor/doc/doc_data.h"
 #include "editor/editor_help.h"
 
-#ifdef DEBUG_METHODS_ENABLED
+#if defined(DEBUG_METHODS_ENABLED) && defined(TOOLS_ENABLED)
 
 #include "core/ustring.h"
 
@@ -148,7 +147,7 @@ class BindingsGenerator {
 		bool requires_object_call;
 
 		/**
-		 * Determines if the method visibility is `internal` (visible only to files in the same assembly).
+		 * Determines if the method visibility is 'internal' (visible only to files in the same assembly).
 		 * Currently, we only use this for methods that are not meant to be exposed,
 		 * but are required by properties as getters or setters.
 		 * Methods that are not meant to be exposed are those that begin with underscore and are not virtual.
@@ -473,6 +472,7 @@ class BindingsGenerator {
 	};
 
 	bool log_print_enabled;
+	bool initialized;
 
 	OrderedHashMap<StringName, TypeInterface> obj_types;
 
@@ -491,6 +491,10 @@ class BindingsGenerator {
 	List<InternalCall> core_custom_icalls;
 	List<InternalCall> editor_custom_icalls;
 
+	Map<StringName, List<StringName> > blacklisted_methods;
+
+	void _initialize_blacklisted_methods();
+
 	struct NameCache {
 		StringName type_void;
 		StringName type_Array;
@@ -499,6 +503,7 @@ class BindingsGenerator {
 		StringName type_VarArg;
 		StringName type_Object;
 		StringName type_Reference;
+		StringName type_RID;
 		StringName type_String;
 		StringName type_at_GlobalScope;
 		StringName enum_Error;
@@ -522,6 +527,7 @@ class BindingsGenerator {
 			type_VarArg = StaticCString::create("VarArg");
 			type_Object = StaticCString::create("Object");
 			type_Reference = StaticCString::create("Reference");
+			type_RID = StaticCString::create("RID");
 			type_String = StaticCString::create("String");
 			type_at_GlobalScope = StaticCString::create("@GlobalScope");
 			enum_Error = StaticCString::create("Error");
@@ -587,9 +593,9 @@ class BindingsGenerator {
 	StringName _get_int_type_name_from_meta(GodotTypeInfo::Metadata p_meta);
 	StringName _get_float_type_name_from_meta(GodotTypeInfo::Metadata p_meta);
 
-	void _default_argument_from_variant(const Variant &p_val, ArgumentInterface &r_iarg);
+	bool _arg_default_value_from_variant(const Variant &p_val, ArgumentInterface &r_iarg);
 
-	void _populate_object_type_interfaces();
+	bool _populate_object_type_interfaces();
 	void _populate_builtin_type_interfaces();
 
 	void _populate_global_constants();
@@ -610,19 +616,23 @@ class BindingsGenerator {
 	void _initialize();
 
 public:
-	Error generate_cs_core_project(const String &p_solution_dir, DotNetSolution &r_solution);
-	Error generate_cs_editor_project(const String &p_solution_dir, DotNetSolution &r_solution);
+	Error generate_cs_core_project(const String &p_proj_dir, Vector<String> &r_compile_files);
+	Error generate_cs_editor_project(const String &p_proj_dir, Vector<String> &r_compile_items);
 	Error generate_cs_api(const String &p_output_dir);
 	Error generate_glue(const String &p_output_dir);
 
-	void set_log_print_enabled(bool p_enabled) { log_print_enabled = p_enabled; }
+	_FORCE_INLINE_ bool is_log_print_enabled() { return log_print_enabled; }
+	_FORCE_INLINE_ void set_log_print_enabled(bool p_enabled) { log_print_enabled = p_enabled; }
+
+	_FORCE_INLINE_ bool is_initialized() { return initialized; }
 
 	static uint32_t get_version();
 
 	static void handle_cmdline_args(const List<String> &p_cmdline_args);
 
 	BindingsGenerator() :
-			log_print_enabled(true) {
+			log_print_enabled(true),
+			initialized(false) {
 		_initialize();
 	}
 };

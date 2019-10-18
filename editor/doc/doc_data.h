@@ -73,6 +73,8 @@ public:
 		String enumeration;
 		String description;
 		String setter, getter;
+		String default_value;
+		bool overridden;
 		bool operator<(const PropertyDoc &p_prop) const {
 			return name < p_prop.name;
 		}

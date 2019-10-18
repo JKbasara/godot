@@ -39,9 +39,6 @@
 #include "core/rid.h"
 #include "core/variant.h"
 
-/**
-	@author Juan Linietsky <reduzio@gmail.com>
-*/
 class VisualServer : public Object {
 
 	GDCLASS(VisualServer, Object);
@@ -140,6 +137,7 @@ public:
 	virtual uint32_t texture_get_height(RID p_texture) const = 0;
 	virtual uint32_t texture_get_depth(RID p_texture) const = 0;
 	virtual void texture_set_size_override(RID p_texture, int p_width, int p_height, int p_depth_3d) = 0;
+	virtual void texture_bind(RID p_texture, uint32_t p_texture_no) = 0;
 
 	virtual void texture_set_path(RID p_texture, const String &p_path) = 0;
 	virtual String texture_get_path(RID p_texture) const = 0;
@@ -393,7 +391,6 @@ public:
 	virtual void skeleton_bone_set_transform_2d(RID p_skeleton, int p_bone, const Transform2D &p_transform) = 0;
 	virtual Transform2D skeleton_bone_get_transform_2d(RID p_skeleton, int p_bone) const = 0;
 	virtual void skeleton_set_base_transform_2d(RID p_skeleton, const Transform2D &p_base_transform) = 0;
-	virtual void skeleton_set_world_transform(RID p_skeleton, bool p_enable, const Transform &p_base_transform) = 0;
 
 	/* Light API */
 
@@ -610,6 +607,7 @@ public:
 	virtual void viewport_set_parent_viewport(RID p_viewport, RID p_parent_viewport) = 0;
 
 	virtual void viewport_attach_to_screen(RID p_viewport, const Rect2 &p_rect = Rect2(), int p_screen = 0) = 0;
+	virtual void viewport_set_render_direct_to_screen(RID p_viewport, bool p_enable) = 0;
 	virtual void viewport_detach(RID p_viewport) = 0;
 
 	enum ViewportUpdateMode {
@@ -706,6 +704,7 @@ public:
 		ENV_BG_COLOR_SKY,
 		ENV_BG_CANVAS,
 		ENV_BG_KEEP,
+		ENV_BG_CAMERA_FEED,
 		ENV_BG_MAX
 	};
 
@@ -717,6 +716,7 @@ public:
 	virtual void environment_set_bg_energy(RID p_env, float p_energy) = 0;
 	virtual void environment_set_canvas_max_layer(RID p_env, int p_max_layer) = 0;
 	virtual void environment_set_ambient_light(RID p_env, const Color &p_color, float p_energy = 1.0, float p_sky_contribution = 0.0) = 0;
+	virtual void environment_set_camera_feed_id(RID p_env, int p_camera_feed_id) = 0;
 
 	//set default SSAO options
 	//set default SSR options
@@ -814,7 +814,7 @@ public:
 	virtual void instance_set_scenario(RID p_instance, RID p_scenario) = 0; // from can be mesh, light, poly, area and portal so far.
 	virtual void instance_set_layer_mask(RID p_instance, uint32_t p_mask) = 0;
 	virtual void instance_set_transform(RID p_instance, const Transform &p_transform) = 0;
-	virtual void instance_attach_object_instance_id(RID p_instance, ObjectID p_ID) = 0;
+	virtual void instance_attach_object_instance_id(RID p_instance, ObjectID p_id) = 0;
 	virtual void instance_set_blend_shape_weight(RID p_instance, int p_shape, float p_weight) = 0;
 	virtual void instance_set_surface_material(RID p_instance, int p_surface, RID p_material) = 0;
 	virtual void instance_set_visible(RID p_instance, bool p_visible) = 0;
@@ -1028,7 +1028,7 @@ public:
 	virtual void mesh_add_surface_from_mesh_data(RID p_mesh, const Geometry::MeshData &p_mesh_data);
 	virtual void mesh_add_surface_from_planes(RID p_mesh, const PoolVector<Plane> &p_planes);
 
-	virtual void set_boot_image(const Ref<Image> &p_image, const Color &p_color, bool p_scale) = 0;
+	virtual void set_boot_image(const Ref<Image> &p_image, const Color &p_color, bool p_scale, bool p_use_filter = true) = 0;
 	virtual void set_default_clear_color(const Color &p_color) = 0;
 
 	enum Features {

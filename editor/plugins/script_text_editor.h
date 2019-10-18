@@ -70,6 +70,8 @@ class ScriptTextEditor : public ScriptEditorBase {
 
 	MenuButton *edit_menu;
 	MenuButton *search_menu;
+	PopupMenu *bookmarks_menu;
+	PopupMenu *breakpoints_menu;
 	PopupMenu *highlighter_menu;
 	PopupMenu *context_menu;
 
@@ -79,7 +81,7 @@ class ScriptTextEditor : public ScriptEditorBase {
 
 	PopupPanel *color_panel;
 	ColorPicker *color_picker;
-	int color_line;
+	Vector2 color_position;
 	String color_args;
 
 	void _update_member_keywords();
@@ -89,6 +91,7 @@ class ScriptTextEditor : public ScriptEditorBase {
 		Color keyword_color;
 		Color basetype_color;
 		Color type_color;
+		Color usertype_color;
 		Color comment_color;
 		Color string_color;
 	} colors_cache;
@@ -118,6 +121,7 @@ class ScriptTextEditor : public ScriptEditorBase {
 		EDIT_TO_UPPERCASE,
 		EDIT_TO_LOWERCASE,
 		EDIT_CAPITALIZE,
+		EDIT_EVALUATE,
 		EDIT_TOGGLE_FOLD_LINE,
 		EDIT_FOLD_ALL_LINES,
 		EDIT_UNFOLD_ALL_LINES,
@@ -128,6 +132,10 @@ class ScriptTextEditor : public ScriptEditorBase {
 		SEARCH_LOCATE_FUNCTION,
 		SEARCH_GOTO_LINE,
 		SEARCH_IN_FILES,
+		BOOKMARK_TOGGLE,
+		BOOKMARK_GOTO_NEXT,
+		BOOKMARK_GOTO_PREV,
+		BOOKMARK_REMOVE_ALL,
 		DEBUG_TOGGLE_BREAKPOINT,
 		DEBUG_REMOVE_ALL_BREAKPOINTS,
 		DEBUG_GOTO_NEXT_BREAKPOINT,
@@ -137,12 +145,17 @@ class ScriptTextEditor : public ScriptEditorBase {
 	};
 
 protected:
-	static void _code_complete_scripts(void *p_ud, const String &p_code, List<String> *r_options, bool &r_force);
+	void _update_breakpoint_list();
+	void _breakpoint_item_pressed(int p_idx);
 	void _breakpoint_toggled(int p_row);
 
-	//no longer virtual
-	void _validate_script();
-	void _code_complete_script(const String &p_code, List<String> *r_options, bool &r_force);
+	void _validate_script(); // No longer virtual.
+	void _update_bookmark_list();
+	void _bookmark_item_pressed(int p_idx);
+
+	static void _code_complete_scripts(void *p_ud, const String &p_code, List<ScriptCodeCompletionOption> *r_options, bool &r_force);
+	void _code_complete_script(const String &p_code, List<ScriptCodeCompletionOption> *r_options, bool &r_force);
+
 	void _load_theme_settings();
 	void _set_theme_for_script();
 	void _show_warnings_panel(bool p_show);
@@ -157,7 +170,7 @@ protected:
 
 	void _edit_option(int p_op);
 	void _edit_option_toggle_inline_comment();
-	void _make_context_menu(bool p_selection, bool p_color, bool p_foldable, bool p_open_docs, bool p_goto_definition);
+	void _make_context_menu(bool p_selection, bool p_color, bool p_foldable, bool p_open_docs, bool p_goto_definition, Vector2 p_pos);
 	void _text_edit_gui_input(const Ref<InputEvent> &ev);
 	void _color_changed(const Color &p_color);
 
@@ -190,12 +203,14 @@ public:
 	virtual void set_edit_state(const Variant &p_state);
 	virtual void ensure_focus();
 	virtual void trim_trailing_whitespace();
+	virtual void insert_final_newline();
 	virtual void convert_indent_to_spaces();
 	virtual void convert_indent_to_tabs();
 	virtual void tag_saved_version();
 
 	virtual void goto_line(int p_line, bool p_with_error = false);
 	void goto_line_selection(int p_line, int p_begin, int p_end);
+	void goto_line_centered(int p_line);
 	virtual void set_executing_line(int p_line);
 	virtual void clear_executing_line();
 
@@ -215,7 +230,10 @@ public:
 	virtual void clear_edit_menu();
 	static void register_editor();
 
+	virtual void validate();
+
 	ScriptTextEditor();
+	~ScriptTextEditor();
 };
 
 #endif // SCRIPT_TEXT_EDITOR_H

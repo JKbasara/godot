@@ -337,12 +337,9 @@ static void clear_touches() {
 // the same size as our display area.
 
 - (void)layoutSubviews {
-	//printf("HERE\n");
 	[EAGLContext setCurrentContext:context];
 	[self destroyFramebuffer];
 	[self createFramebuffer];
-	[self drawView];
-	[self drawView];
 }
 
 - (BOOL)createFramebuffer {
@@ -494,7 +491,7 @@ static void clear_touches() {
 #ifdef DEBUG_ENABLED
 	GLenum err = glGetError();
 	if (err)
-		NSLog(@"%x error", err);
+		NSLog(@"DrawView: %x error", err);
 #endif
 }
 

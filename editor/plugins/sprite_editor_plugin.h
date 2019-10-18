@@ -67,7 +67,8 @@ class SpriteEditor : public Control {
 	Vector<int> computed_indices;
 
 	SpinBox *simplification;
-	SpinBox *island_merging;
+	SpinBox *grow_pixels;
+	SpinBox *shrink_pixels;
 	Button *update_preview;
 
 	void _menu_option(int p_option);
@@ -84,7 +85,7 @@ class SpriteEditor : public Control {
 	void _create_collision_polygon_2d_node();
 	void _create_light_occluder_2d_node();
 
-	void _add_as_sibling_or_child(Node2D *p_own_node, Node2D *p_new_node);
+	void _add_as_sibling_or_child(Node *p_own_node, Node *p_new_node);
 
 protected:
 	void _node_removed(Node *p_node);

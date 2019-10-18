@@ -146,7 +146,7 @@ Error OS_X11::initialize(const VideoMode &p_desired, int p_video_driver, int p_a
 		if (is_stdout_verbose()) {
 			WARN_PRINT("IME is disabled");
 		}
-		modifiers = XSetLocaleModifiers("@im=none");
+		XSetLocaleModifiers("@im=none");
 		WARN_PRINT("Error setting locale modifiers");
 	}
 
@@ -378,6 +378,13 @@ Error OS_X11::initialize(const VideoMode &p_desired, int p_video_driver, int p_a
 		XChangeProperty(x11_display, x11_window, property, property, 32, PropModeReplace, (unsigned char *)&hints, 5);
 	}
 
+	// make PID known to X11
+	{
+		const long pid = this->get_process_id();
+		Atom net_wm_pid = XInternAtom(x11_display, "_NET_WM_PID", False);
+		XChangeProperty(x11_display, x11_window, net_wm_pid, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&pid, 1);
+	}
+
 	// disable resizable window
 	if (!current_videomode.resizable && !current_videomode.fullscreen) {
 		XSizeHints *xsh;
@@ -534,22 +541,26 @@ Error OS_X11::initialize(const VideoMode &p_desired, int p_video_driver, int p_a
 	}
 
 	{
-		Pixmap cursormask;
-		XGCValues xgc;
-		GC gc;
-		XColor col;
-		Cursor cursor;
+		// Creating an empty/transparent cursor
 
-		cursormask = XCreatePixmap(x11_display, RootWindow(x11_display, DefaultScreen(x11_display)), 1, 1, 1);
+		// Create 1x1 bitmap
+		Pixmap cursormask = XCreatePixmap(x11_display,
+				RootWindow(x11_display, DefaultScreen(x11_display)), 1, 1, 1);
+
+		// Fill with zero
+		XGCValues xgc;
 		xgc.function = GXclear;
-		gc = XCreateGC(x11_display, cursormask, GCFunction, &xgc);
+		GC gc = XCreateGC(x11_display, cursormask, GCFunction, &xgc);
 		XFillRectangle(x11_display, cursormask, gc, 0, 0, 1, 1);
-		col.pixel = 0;
-		col.red = 0;
-		col.flags = 4;
-		cursor = XCreatePixmapCursor(x11_display,
-				cursormask, cursormask,
+
+		// Color value doesn't matter. Mask zero means no foreground or background will be drawn
+		XColor col = {};
+
+		Cursor cursor = XCreatePixmapCursor(x11_display,
+				cursormask, // source (using cursor mask as placeholder, since it'll all be ignored)
+				cursormask, // mask
 				&col, &col, 0, 0);
+
 		XFreePixmap(x11_display, cursormask);
 		XFreeGC(x11_display, gc);
 
@@ -579,6 +590,9 @@ Error OS_X11::initialize(const VideoMode &p_desired, int p_video_driver, int p_a
 
 	AudioDriverManager::initialize(p_audio_driver);
 
+	///@TODO implement a subclass for Linux and instantiate that instead
+	camera_server = memnew(CameraServer);
+
 	input = memnew(InputDefault);
 
 	window_has_focus = true; // Set focus to true at init
@@ -589,7 +603,7 @@ Error OS_X11::initialize(const VideoMode &p_desired, int p_video_driver, int p_a
 
 	power_manager = memnew(PowerX11);
 
-	if (p_desired.layered_splash) {
+	if (p_desired.layered) {
 		set_window_per_pixel_transparency_enabled(true);
 	}
 
@@ -779,6 +793,9 @@ void OS_X11::finalize() {
 
 	memdelete(input);
 
+	memdelete(camera_server);
+
+	cursors_cache.clear();
 	visual_server->finish();
 	memdelete(visual_server);
 	//memdelete(rasterizer);
@@ -997,28 +1014,38 @@ void OS_X11::set_wm_fullscreen(bool p_enabled) {
 
 	XFlush(x11_display);
 
-	if (!p_enabled && !is_window_resizable()) {
+	if (!p_enabled) {
 		// Reset the non-resizable flags if we un-set these before.
 		Size2 size = get_window_size();
 		XSizeHints *xsh;
-
 		xsh = XAllocSizeHints();
-		xsh->flags = PMinSize | PMaxSize;
-		xsh->min_width = size.x;
-		xsh->max_width = size.x;
-		xsh->min_height = size.y;
-		xsh->max_height = size.y;
-
+		if (!is_window_resizable()) {
+			xsh->flags = PMinSize | PMaxSize;
+			xsh->min_width = size.x;
+			xsh->max_width = size.x;
+			xsh->min_height = size.y;
+			xsh->max_height = size.y;
+		} else {
+			xsh->flags = 0L;
+			if (min_size != Size2()) {
+				xsh->flags |= PMinSize;
+				xsh->min_width = min_size.x;
+				xsh->min_height = min_size.y;
+			}
+			if (max_size != Size2()) {
+				xsh->flags |= PMaxSize;
+				xsh->max_width = max_size.x;
+				xsh->max_height = max_size.y;
+			}
+		}
 		XSetWMNormalHints(x11_display, x11_window, xsh);
 		XFree(xsh);
-	}
 
-	if (!p_enabled && !get_borderless_window()) {
-		// put decorations back if the window wasn't suppoesed to be borderless
+		// put back or remove decorations according to the last set borderless state
 		Hints hints;
 		Atom property;
 		hints.flags = 2;
-		hints.decorations = 1;
+		hints.decorations = current_videomode.borderless_window ? 0 : 1;
 		property = XInternAtom(x11_display, "_MOTIF_WM_HINTS", True);
 		XChangeProperty(x11_display, x11_window, property, property, 32, PropModeReplace, (unsigned char *)&hints, 5);
 	}
@@ -1180,22 +1207,24 @@ Point2 OS_X11::get_window_position() const {
 void OS_X11::set_window_position(const Point2 &p_position) {
 	int x = 0;
 	int y = 0;
-	if (get_borderless_window() == false) {
+	if (!get_borderless_window()) {
 		//exclude window decorations
 		XSync(x11_display, False);
 		Atom prop = XInternAtom(x11_display, "_NET_FRAME_EXTENTS", True);
-		Atom type;
-		int format;
-		unsigned long len;
-		unsigned long remaining;
-		unsigned char *data = NULL;
-		if (XGetWindowProperty(x11_display, x11_window, prop, 0, 4, False, AnyPropertyType, &type, &format, &len, &remaining, &data) == Success) {
-			if (format == 32 && len == 4) {
-				long *extents = (long *)data;
-				x = extents[0];
-				y = extents[2];
+		if (prop != None) {
+			Atom type;
+			int format;
+			unsigned long len;
+			unsigned long remaining;
+			unsigned char *data = NULL;
+			if (XGetWindowProperty(x11_display, x11_window, prop, 0, 4, False, AnyPropertyType, &type, &format, &len, &remaining, &data) == Success) {
+				if (format == 32 && len == 4) {
+					long *extents = (long *)data;
+					x = extents[0];
+					y = extents[2];
+				}
+				XFree(data);
 			}
-			XFree(data);
 		}
 	}
 	XMoveWindow(x11_display, x11_window, p_position.x - x, p_position.y - y);
@@ -1215,20 +1244,88 @@ Size2 OS_X11::get_real_window_size() const {
 	int w = xwa.width;
 	int h = xwa.height;
 	Atom prop = XInternAtom(x11_display, "_NET_FRAME_EXTENTS", True);
-	Atom type;
-	int format;
-	unsigned long len;
-	unsigned long remaining;
-	unsigned char *data = NULL;
-	if (XGetWindowProperty(x11_display, x11_window, prop, 0, 4, False, AnyPropertyType, &type, &format, &len, &remaining, &data) == Success) {
-		if (format == 32 && len == 4) {
-			long *extents = (long *)data;
-			w += extents[0] + extents[1]; // left, right
-			h += extents[2] + extents[3]; // top, bottom
+	if (prop != None) {
+		Atom type;
+		int format;
+		unsigned long len;
+		unsigned long remaining;
+		unsigned char *data = NULL;
+		if (XGetWindowProperty(x11_display, x11_window, prop, 0, 4, False, AnyPropertyType, &type, &format, &len, &remaining, &data) == Success) {
+			if (format == 32 && len == 4) {
+				long *extents = (long *)data;
+				w += extents[0] + extents[1]; // left, right
+				h += extents[2] + extents[3]; // top, bottom
+			}
+			XFree(data);
 		}
-		XFree(data);
 	}
 	return Size2(w, h);
+}
+
+Size2 OS_X11::get_max_window_size() const {
+	return max_size;
+}
+
+Size2 OS_X11::get_min_window_size() const {
+	return min_size;
+}
+
+void OS_X11::set_min_window_size(const Size2 p_size) {
+
+	if ((p_size != Size2()) && (max_size != Size2()) && ((p_size.x > max_size.x) || (p_size.y > max_size.y))) {
+		ERR_PRINT("Minimum window size can't be larger than maximum window size!");
+		return;
+	}
+	min_size = p_size;
+
+	if (is_window_resizable()) {
+		XSizeHints *xsh;
+		xsh = XAllocSizeHints();
+		xsh->flags = 0L;
+		if (min_size != Size2()) {
+			xsh->flags |= PMinSize;
+			xsh->min_width = min_size.x;
+			xsh->min_height = min_size.y;
+		}
+		if (max_size != Size2()) {
+			xsh->flags |= PMaxSize;
+			xsh->max_width = max_size.x;
+			xsh->max_height = max_size.y;
+		}
+		XSetWMNormalHints(x11_display, x11_window, xsh);
+		XFree(xsh);
+
+		XFlush(x11_display);
+	}
+}
+
+void OS_X11::set_max_window_size(const Size2 p_size) {
+
+	if ((p_size != Size2()) && ((p_size.x < min_size.x) || (p_size.y < min_size.y))) {
+		ERR_PRINT("Maximum window size can't be smaller than minimum window size!");
+		return;
+	}
+	max_size = p_size;
+
+	if (is_window_resizable()) {
+		XSizeHints *xsh;
+		xsh = XAllocSizeHints();
+		xsh->flags = 0L;
+		if (min_size != Size2()) {
+			xsh->flags |= PMinSize;
+			xsh->min_width = min_size.x;
+			xsh->min_height = min_size.y;
+		}
+		if (max_size != Size2()) {
+			xsh->flags |= PMaxSize;
+			xsh->max_width = max_size.x;
+			xsh->max_height = max_size.y;
+		}
+		XSetWMNormalHints(x11_display, x11_window, xsh);
+		XFree(xsh);
+
+		XFlush(x11_display);
+	}
 }
 
 void OS_X11::set_window_size(const Size2 p_size) {
@@ -1243,17 +1340,29 @@ void OS_X11::set_window_size(const Size2 p_size) {
 	int old_h = xwa.height;
 
 	// If window resizable is disabled we need to update the attributes first
+	XSizeHints *xsh;
+	xsh = XAllocSizeHints();
 	if (!is_window_resizable()) {
-		XSizeHints *xsh;
-		xsh = XAllocSizeHints();
 		xsh->flags = PMinSize | PMaxSize;
 		xsh->min_width = p_size.x;
 		xsh->max_width = p_size.x;
 		xsh->min_height = p_size.y;
 		xsh->max_height = p_size.y;
-		XSetWMNormalHints(x11_display, x11_window, xsh);
-		XFree(xsh);
+	} else {
+		xsh->flags = 0L;
+		if (min_size != Size2()) {
+			xsh->flags |= PMinSize;
+			xsh->min_width = min_size.x;
+			xsh->min_height = min_size.y;
+		}
+		if (max_size != Size2()) {
+			xsh->flags |= PMaxSize;
+			xsh->max_width = max_size.x;
+			xsh->max_height = max_size.y;
+		}
 	}
+	XSetWMNormalHints(x11_display, x11_window, xsh);
+	XFree(xsh);
 
 	// Resize the window
 	XResizeWindow(x11_display, x11_window, p_size.x, p_size.y);
@@ -1299,20 +1408,37 @@ bool OS_X11::is_window_fullscreen() const {
 }
 
 void OS_X11::set_window_resizable(bool p_enabled) {
-	XSizeHints *xsh;
-	Size2 size = get_window_size();
 
+	XSizeHints *xsh;
 	xsh = XAllocSizeHints();
-	xsh->flags = p_enabled ? 0L : PMinSize | PMaxSize;
 	if (!p_enabled) {
+		Size2 size = get_window_size();
+
+		xsh->flags = PMinSize | PMaxSize;
 		xsh->min_width = size.x;
 		xsh->max_width = size.x;
 		xsh->min_height = size.y;
 		xsh->max_height = size.y;
+	} else {
+		xsh->flags = 0L;
+		if (min_size != Size2()) {
+			xsh->flags |= PMinSize;
+			xsh->min_width = min_size.x;
+			xsh->min_height = min_size.y;
+		}
+		if (max_size != Size2()) {
+			xsh->flags |= PMaxSize;
+			xsh->max_width = max_size.x;
+			xsh->max_height = max_size.y;
+		}
 	}
+
 	XSetWMNormalHints(x11_display, x11_window, xsh);
 	XFree(xsh);
+
 	current_videomode.resizable = p_enabled;
+
+	XFlush(x11_display);
 }
 
 bool OS_X11::is_window_resizable() const {
@@ -1399,9 +1525,12 @@ void OS_X11::set_window_maximized(bool p_enabled) {
 
 	XSendEvent(x11_display, DefaultRootWindow(x11_display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
 
-	if (is_window_maximize_allowed()) {
-		while (p_enabled && !is_window_maximized()) {
-			// Wait for effective resizing (so the GLX context is too).
+	if (p_enabled && is_window_maximize_allowed()) {
+		// Wait for effective resizing (so the GLX context is too).
+		// Give up after 0.5s, it's not going to happen on this WM.
+		// https://github.com/godotengine/godot/issues/19978
+		for (int attempt = 0; !is_window_maximized() && attempt < 50; attempt++) {
+			usleep(10000);
 		}
 	}
 
@@ -1437,7 +1566,7 @@ bool OS_X11::is_window_maximize_allowed() {
 		bool found_wm_act_max_horz = false;
 		bool found_wm_act_max_vert = false;
 
-		for (unsigned int i = 0; i < len; i++) {
+		for (uint64_t i = 0; i < len; i++) {
 			if (atoms[i] == wm_act_max_horz)
 				found_wm_act_max_horz = true;
 			if (atoms[i] == wm_act_max_vert)
@@ -1483,7 +1612,7 @@ bool OS_X11::is_window_maximized() const {
 		bool found_wm_max_horz = false;
 		bool found_wm_max_vert = false;
 
-		for (unsigned int i = 0; i < len; i++) {
+		for (uint64_t i = 0; i < len; i++) {
 			if (atoms[i] == wm_max_horz)
 				found_wm_max_horz = true;
 			if (atoms[i] == wm_max_vert)
@@ -1523,7 +1652,7 @@ bool OS_X11::is_window_always_on_top() const {
 
 void OS_X11::set_borderless_window(bool p_borderless) {
 
-	if (current_videomode.borderless_window == p_borderless)
+	if (get_borderless_window() == p_borderless)
 		return;
 
 	if (!p_borderless && layered_window)
@@ -1543,7 +1672,24 @@ void OS_X11::set_borderless_window(bool p_borderless) {
 }
 
 bool OS_X11::get_borderless_window() {
-	return current_videomode.borderless_window;
+
+	bool borderless = current_videomode.borderless_window;
+	Atom prop = XInternAtom(x11_display, "_MOTIF_WM_HINTS", True);
+	if (prop != None) {
+
+		Atom type;
+		int format;
+		unsigned long len;
+		unsigned long remaining;
+		unsigned char *data = NULL;
+		if (XGetWindowProperty(x11_display, x11_window, prop, 0, sizeof(Hints), False, AnyPropertyType, &type, &format, &len, &remaining, &data) == Success) {
+			if (data && (format == 32) && (len >= 5)) {
+				borderless = !((Hints *)data)->decorations;
+			}
+			XFree(data);
+		}
+	}
+	return borderless;
 }
 
 void OS_X11::request_attention() {
@@ -1618,7 +1764,11 @@ void OS_X11::handle_key_event(XKeyEvent *p_event, bool p_echo) {
 
 	// XLookupString returns keysyms usable as nice scancodes/
 	char str[256 + 1];
-	XLookupString(xkeyevent, str, 256, &keysym_keycode, NULL);
+	XKeyEvent xkeyevent_no_mod = *xkeyevent;
+	xkeyevent_no_mod.state &= ~ShiftMask;
+	xkeyevent_no_mod.state &= ~ControlMask;
+	XLookupString(xkeyevent, str, 256, &keysym_unicode, NULL);
+	XLookupString(&xkeyevent_no_mod, NULL, 0, &keysym_keycode, NULL);
 
 	// Meanwhile, XLookupString returns keysyms useful for unicode.
 
@@ -1627,8 +1777,6 @@ void OS_X11::handle_key_event(XKeyEvent *p_event, bool p_echo) {
 		xmbstring = (char *)memalloc(sizeof(char) * 8);
 		xmblen = 8;
 	}
-
-	keysym_unicode = keysym_keycode;
 
 	if (xkeyevent->type == KeyPress && xic) {
 
@@ -2370,7 +2518,7 @@ void OS_X11::process_xevents() {
 
 					Vector<String> files = String((char *)p.data).split("\n", false);
 					for (int i = 0; i < files.size(); i++) {
-						files.write[i] = files[i].replace("file://", "").http_unescape().strip_escapes();
+						files.write[i] = files[i].replace("file://", "").http_unescape().strip_edges();
 					}
 					main_loop->drop_files(files);
 
@@ -2588,7 +2736,7 @@ String OS_X11::get_clipboard() const {
 	return ret;
 }
 
-String OS_X11::get_name() {
+String OS_X11::get_name() const {
 
 	return "X11";
 }
@@ -2743,7 +2891,20 @@ OS::CursorShape OS_X11::get_cursor_shape() const {
 }
 
 void OS_X11::set_custom_mouse_cursor(const RES &p_cursor, CursorShape p_shape, const Vector2 &p_hotspot) {
+
 	if (p_cursor.is_valid()) {
+
+		Map<CursorShape, Vector<Variant> >::Element *cursor_c = cursors_cache.find(p_shape);
+
+		if (cursor_c) {
+			if (cursor_c->get()[0] == p_cursor && cursor_c->get()[1] == p_hotspot) {
+				set_cursor_shape(p_shape);
+				return;
+			}
+
+			cursors_cache.erase(p_shape);
+		}
+
 		Ref<Texture> texture = p_cursor;
 		Ref<AtlasTexture> atlas_texture = p_cursor;
 		Ref<Image> image;
@@ -2812,6 +2973,11 @@ void OS_X11::set_custom_mouse_cursor(const RES &p_cursor, CursorShape p_shape, c
 		// Save it for a further usage
 		cursors[p_shape] = XcursorImageLoadCursor(x11_display, cursor_image);
 
+		Vector<Variant> params;
+		params.push_back(p_cursor);
+		params.push_back(p_hotspot);
+		cursors_cache.insert(p_shape, params);
+
 		if (p_shape == current_cursor) {
 			if (mouse_mode == MOUSE_MODE_VISIBLE || mouse_mode == MOUSE_MODE_CONFINED) {
 				XDefineCursor(x11_display, x11_window, cursors[p_shape]);
@@ -2829,6 +2995,8 @@ void OS_X11::set_custom_mouse_cursor(const RES &p_cursor, CursorShape p_shape, c
 		CursorShape c = current_cursor;
 		current_cursor = CURSOR_MAX;
 		set_cursor_shape(c);
+
+		cursors_cache.erase(p_shape);
 	}
 }
 
@@ -2861,8 +3029,8 @@ void OS_X11::alert(const String &p_alert, const String &p_title) {
 	String program;
 
 	for (int i = 0; i < path_elems.size(); i++) {
-		for (unsigned int k = 0; k < sizeof(message_programs) / sizeof(char *); k++) {
-			String tested_path = path_elems[i] + "/" + message_programs[k];
+		for (uint64_t k = 0; k < sizeof(message_programs) / sizeof(char *); k++) {
+			String tested_path = path_elems[i].plus_file(message_programs[k]);
 
 			if (FileAccess::exists(tested_path)) {
 				program = tested_path;
@@ -2914,8 +3082,6 @@ void OS_X11::alert(const String &p_alert, const String &p_title) {
 	} else {
 		print_line(p_alert);
 	}
-
-	return;
 }
 
 bool g_set_icon_error = false;

@@ -102,7 +102,7 @@ Vector<Vector2> expand(const Vector<Vector2> &points, const Rect2i &rect, float 
 
 	int lasti = p2->Contour.size() - 1;
 	Vector2 prev = Vector2(p2->Contour[lasti].X / PRECISION, p2->Contour[lasti].Y / PRECISION);
-	for (unsigned int i = 0; i < p2->Contour.size(); i++) {
+	for (uint64_t i = 0; i < p2->Contour.size(); i++) {
 
 		Vector2 cur = Vector2(p2->Contour[i].X / PRECISION, p2->Contour[i].Y / PRECISION);
 		if (cur.distance_to(prev) > 0.5) {
@@ -178,6 +178,7 @@ void SpriteEditor::_update_mesh_data() {
 		err_dialog->popup_centered_minsize();
 		return;
 	}
+
 	Ref<Image> image = texture->get_data();
 	ERR_FAIL_COND(image.is_null());
 	Rect2 rect;
@@ -190,7 +191,12 @@ void SpriteEditor::_update_mesh_data() {
 	bm.instance();
 	bm->create_from_image_alpha(image);
 
-	int grow = island_merging->get_value();
+	int shrink = shrink_pixels->get_value();
+	if (shrink > 0) {
+		bm->shrink_mask(shrink, rect);
+	}
+
+	int grow = grow_pixels->get_value();
 	if (grow > 0) {
 		bm->grow_mask(grow, rect);
 	}
@@ -327,10 +333,24 @@ void SpriteEditor::_convert_to_mesh_2d_node() {
 
 	MeshInstance2D *mesh_instance = memnew(MeshInstance2D);
 	mesh_instance->set_mesh(mesh);
-	EditorNode::get_singleton()->get_scene_tree_dock()->replace_node(node, mesh_instance);
+
+	UndoRedo *ur = EditorNode::get_singleton()->get_undo_redo();
+	ur->create_action(TTR("Convert to Mesh2D"));
+	ur->add_do_method(EditorNode::get_singleton()->get_scene_tree_dock(), "replace_node", node, mesh_instance, true, false);
+	ur->add_do_reference(mesh_instance);
+	ur->add_undo_method(EditorNode::get_singleton()->get_scene_tree_dock(), "replace_node", mesh_instance, node, false, false);
+	ur->add_undo_reference(node);
+	ur->commit_action();
 }
 
 void SpriteEditor::_convert_to_polygon_2d_node() {
+
+	if (computed_outline_lines.empty()) {
+		err_dialog->set_text(TTR("Invalid geometry, can't create polygon."));
+		err_dialog->popup_centered_minsize();
+		return;
+	}
+
 	Polygon2D *polygon_2d_instance = memnew(Polygon2D);
 
 	int total_point_count = 0;
@@ -355,12 +375,6 @@ void SpriteEditor::_convert_to_polygon_2d_node() {
 		Vector<Vector2> outline = computed_outline_lines[i];
 		Vector<Vector2> uv_outline = outline_lines[i];
 
-		if (outline.size() < 3) {
-			err_dialog->set_text(TTR("Invalid geometry, can't create polygon."));
-			err_dialog->popup_centered_minsize();
-			return;
-		}
-
 		PoolIntArray pia;
 		pia.resize(outline.size());
 		PoolIntArray::Write pia_write = pia.write();
@@ -379,37 +393,50 @@ void SpriteEditor::_convert_to_polygon_2d_node() {
 	polygon_2d_instance->set_polygon(polygon);
 	polygon_2d_instance->set_polygons(polys);
 
-	EditorNode::get_singleton()->get_scene_tree_dock()->replace_node(node, polygon_2d_instance);
+	UndoRedo *ur = EditorNode::get_singleton()->get_undo_redo();
+	ur->create_action(TTR("Convert to Polygon2D"));
+	ur->add_do_method(EditorNode::get_singleton()->get_scene_tree_dock(), "replace_node", node, polygon_2d_instance, true, false);
+	ur->add_do_reference(polygon_2d_instance);
+	ur->add_undo_method(EditorNode::get_singleton()->get_scene_tree_dock(), "replace_node", polygon_2d_instance, node, false, false);
+	ur->add_undo_reference(node);
+	ur->commit_action();
 }
 
 void SpriteEditor::_create_collision_polygon_2d_node() {
+
+	if (computed_outline_lines.empty()) {
+		err_dialog->set_text(TTR("Invalid geometry, can't create collision polygon."));
+		err_dialog->popup_centered_minsize();
+		return;
+	}
+
 	for (int i = 0; i < computed_outline_lines.size(); i++) {
 
 		Vector<Vector2> outline = computed_outline_lines[i];
-
-		if (outline.size() < 3) {
-			err_dialog->set_text(TTR("Invalid geometry, can't create collision polygon."));
-			err_dialog->popup_centered_minsize();
-			continue;
-		}
 
 		CollisionPolygon2D *collision_polygon_2d_instance = memnew(CollisionPolygon2D);
 		collision_polygon_2d_instance->set_polygon(outline);
 
-		_add_as_sibling_or_child(node, collision_polygon_2d_instance);
+		UndoRedo *ur = EditorNode::get_singleton()->get_undo_redo();
+		ur->create_action(TTR("Create CollisionPolygon2D Sibling"));
+		ur->add_do_method(this, "_add_as_sibling_or_child", node, collision_polygon_2d_instance);
+		ur->add_do_reference(collision_polygon_2d_instance);
+		ur->add_undo_method(node != this->get_tree()->get_edited_scene_root() ? node->get_parent() : this->get_tree()->get_edited_scene_root(), "remove_child", collision_polygon_2d_instance);
+		ur->commit_action();
 	}
 }
 
 void SpriteEditor::_create_light_occluder_2d_node() {
+
+	if (computed_outline_lines.empty()) {
+		err_dialog->set_text(TTR("Invalid geometry, can't create light occluder."));
+		err_dialog->popup_centered_minsize();
+		return;
+	}
+
 	for (int i = 0; i < computed_outline_lines.size(); i++) {
 
 		Vector<Vector2> outline = computed_outline_lines[i];
-
-		if (outline.size() < 3) {
-			err_dialog->set_text(TTR("Invalid geometry, can't create light occluder."));
-			err_dialog->popup_centered_minsize();
-			continue;
-		}
 
 		Ref<OccluderPolygon2D> polygon;
 		polygon.instance();
@@ -425,15 +452,20 @@ void SpriteEditor::_create_light_occluder_2d_node() {
 		LightOccluder2D *light_occluder_2d_instance = memnew(LightOccluder2D);
 		light_occluder_2d_instance->set_occluder_polygon(polygon);
 
-		_add_as_sibling_or_child(node, light_occluder_2d_instance);
+		UndoRedo *ur = EditorNode::get_singleton()->get_undo_redo();
+		ur->create_action(TTR("Create LightOccluder2D Sibling"));
+		ur->add_do_method(this, "_add_as_sibling_or_child", node, light_occluder_2d_instance);
+		ur->add_do_reference(light_occluder_2d_instance);
+		ur->add_undo_method(node != this->get_tree()->get_edited_scene_root() ? node->get_parent() : this->get_tree()->get_edited_scene_root(), "remove_child", light_occluder_2d_instance);
+		ur->commit_action();
 	}
 }
 
-void SpriteEditor::_add_as_sibling_or_child(Node2D *p_own_node, Node2D *p_new_node) {
+void SpriteEditor::_add_as_sibling_or_child(Node *p_own_node, Node *p_new_node) {
 	// Can't make sibling if own node is scene root
 	if (p_own_node != this->get_tree()->get_edited_scene_root()) {
 		p_own_node->get_parent()->add_child(p_new_node, true);
-		p_new_node->set_transform(p_own_node->get_transform());
+		Object::cast_to<Node2D>(p_new_node)->set_transform(Object::cast_to<Node2D>(p_own_node)->get_transform());
 	} else {
 		p_own_node->add_child(p_new_node, true);
 	}
@@ -508,10 +540,14 @@ void SpriteEditor::_debug_uv_draw() {
 
 	Ref<Texture> tex = node->get_texture();
 	ERR_FAIL_COND(!tex.is_valid());
+
+	Point2 draw_pos_offset = Point2(1.0, 1.0);
+	Size2 draw_size_offset = Size2(2.0, 2.0);
+
 	debug_uv->set_clip_contents(true);
-	debug_uv->draw_texture(tex, Point2());
-	debug_uv->set_custom_minimum_size(tex->get_size());
-	//debug_uv->draw_set_transform(Vector2(), 0, debug_uv->get_size());
+	debug_uv->draw_texture(tex, draw_pos_offset);
+	debug_uv->set_custom_minimum_size(tex->get_size() + draw_size_offset);
+	debug_uv->draw_set_transform(draw_pos_offset, 0, Size2(1.0, 1.0));
 
 	Color color = Color(1.0, 0.8, 0.7);
 
@@ -534,6 +570,7 @@ void SpriteEditor::_bind_methods() {
 	ClassDB::bind_method("_debug_uv_draw", &SpriteEditor::_debug_uv_draw);
 	ClassDB::bind_method("_update_mesh_data", &SpriteEditor::_update_mesh_data);
 	ClassDB::bind_method("_create_node", &SpriteEditor::_create_node);
+	ClassDB::bind_method("_add_as_sibling_or_child", &SpriteEditor::_add_as_sibling_or_child);
 }
 
 SpriteEditor::SpriteEditor() {
@@ -580,13 +617,21 @@ SpriteEditor::SpriteEditor() {
 	simplification->set_value(2);
 	hb->add_child(simplification);
 	hb->add_spacer();
+	hb->add_child(memnew(Label(TTR("Shrink (Pixels): "))));
+	shrink_pixels = memnew(SpinBox);
+	shrink_pixels->set_min(0);
+	shrink_pixels->set_max(10);
+	shrink_pixels->set_step(1);
+	shrink_pixels->set_value(0);
+	hb->add_child(shrink_pixels);
+	hb->add_spacer();
 	hb->add_child(memnew(Label(TTR("Grow (Pixels): "))));
-	island_merging = memnew(SpinBox);
-	island_merging->set_min(0);
-	island_merging->set_max(10);
-	island_merging->set_step(1);
-	island_merging->set_value(2);
-	hb->add_child(island_merging);
+	grow_pixels = memnew(SpinBox);
+	grow_pixels->set_min(0);
+	grow_pixels->set_max(10);
+	grow_pixels->set_step(1);
+	grow_pixels->set_value(2);
+	hb->add_child(grow_pixels);
 	hb->add_spacer();
 	update_preview = memnew(Button);
 	update_preview->set_text(TTR("Update Preview"));

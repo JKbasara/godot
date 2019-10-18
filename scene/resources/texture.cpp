@@ -36,6 +36,7 @@
 #include "core/os/os.h"
 #include "mesh.h"
 #include "scene/resources/bit_map.h"
+#include "servers/camera/camera_feed.h"
 
 Size2 Texture::get_size() const {
 
@@ -111,10 +112,13 @@ void ImageTexture::reload_from_file() {
 	Ref<Image> img;
 	img.instance();
 
-	Error err = ImageLoader::load_image(path, img);
-	ERR_FAIL_COND(err != OK);
-
-	create_from_image(img, flags);
+	if (ImageLoader::load_image(path, img) == OK) {
+		create_from_image(img, flags);
+	} else {
+		Resource::reload_from_file();
+		_change_notify();
+		emit_changed();
+	}
 }
 
 bool ImageTexture::_set(const StringName &p_name, const Variant &p_value) {
@@ -172,11 +176,12 @@ void ImageTexture::_reload_hook(const RID &p_hook) {
 	img.instance();
 	Error err = ImageLoader::load_image(path, img);
 
-	ERR_FAIL_COND(err != OK);
+	ERR_FAIL_COND_MSG(err != OK, "Cannot load image from path '" + path + "'.");
 
 	VisualServer::get_singleton()->texture_set_data(texture, img);
 
 	_change_notify();
+	emit_changed();
 }
 
 void ImageTexture::create(int p_width, int p_height, Image::Format p_format, uint32_t p_flags) {
@@ -187,6 +192,7 @@ void ImageTexture::create(int p_width, int p_height, Image::Format p_format, uin
 	w = p_width;
 	h = p_height;
 	_change_notify();
+	emit_changed();
 }
 void ImageTexture::create_from_image(const Ref<Image> &p_image, uint32_t p_flags) {
 
@@ -199,23 +205,23 @@ void ImageTexture::create_from_image(const Ref<Image> &p_image, uint32_t p_flags
 	VisualServer::get_singleton()->texture_allocate(texture, p_image->get_width(), p_image->get_height(), 0, p_image->get_format(), VS::TEXTURE_TYPE_2D, p_flags);
 	VisualServer::get_singleton()->texture_set_data(texture, p_image);
 	_change_notify();
+	emit_changed();
 
 	image_stored = true;
 }
 
 void ImageTexture::set_flags(uint32_t p_flags) {
 
-	/*	uint32_t cube = flags & FLAG_CUBEMAP;
-	if (flags == p_flags&cube)
+	if (flags == p_flags)
 		return;
 
-	flags=p_flags|cube;	*/
 	flags = p_flags;
 	if (w == 0 || h == 0) {
 		return; //uninitialized, do not set to texture
 	}
 	VisualServer::get_singleton()->texture_set_flags(texture, p_flags);
 	_change_notify("flags");
+	emit_changed();
 }
 
 uint32_t ImageTexture::get_flags() const {
@@ -230,7 +236,7 @@ Image::Format ImageTexture::get_format() const {
 #ifndef DISABLE_DEPRECATED
 Error ImageTexture::load(const String &p_path) {
 
-	WARN_DEPRECATED
+	WARN_DEPRECATED;
 	Ref<Image> img;
 	img.instance();
 	Error err = img->load(p_path);
@@ -247,6 +253,8 @@ void ImageTexture::set_data(const Ref<Image> &p_image) {
 	VisualServer::get_singleton()->texture_set_data(texture, p_image);
 
 	_change_notify();
+	emit_changed();
+
 	alpha_cache.unref();
 	image_stored = true;
 }
@@ -638,7 +646,7 @@ Error StreamTexture::_load_data(const String &p_path, int &tw, int &th, int &tw_
 		bool mipmaps = df & FORMAT_BIT_HAS_MIPMAPS;
 
 		if (!mipmaps) {
-			int size = Image::get_image_data_size(tw, th, format, 0);
+			int size = Image::get_image_data_size(tw, th, format, false);
 
 			PoolVector<uint8_t> img_data;
 			img_data.resize(size);
@@ -660,7 +668,6 @@ Error StreamTexture::_load_data(const String &p_path, int &tw, int &th, int &tw_
 			int mipmaps2 = Image::get_image_required_mipmaps(tw, th, format);
 			int total_size = Image::get_image_data_size(tw, th, format, true);
 			int idx = 0;
-			int ofs = 0;
 
 			while (mipmaps2 > 1 && p_size_limit > 0 && (sw > p_size_limit || sh > p_size_limit)) {
 
@@ -670,9 +677,7 @@ Error StreamTexture::_load_data(const String &p_path, int &tw, int &th, int &tw_
 				idx++;
 			}
 
-			if (idx > 0) {
-				ofs = Image::get_image_data_size(tw, th, format, idx - 1);
-			}
+			int ofs = Image::get_image_mipmap_offset(tw, th, format, idx);
 
 			if (total_size - ofs <= 0) {
 				memdelete(f);
@@ -736,6 +741,7 @@ Error StreamTexture::load(const String &p_path) {
 	format = image->get_format();
 
 	_change_notify();
+	emit_changed();
 	return OK;
 }
 String StreamTexture::get_load_path() const {
@@ -827,6 +833,7 @@ void StreamTexture::set_flags(uint32_t p_flags) {
 	flags = p_flags;
 	VS::get_singleton()->texture_set_flags(texture, flags);
 	_change_notify("flags");
+	emit_changed();
 }
 
 void StreamTexture::reload_from_file() {
@@ -1487,8 +1494,10 @@ uint32_t CubeMap::get_flags() const {
 
 void CubeMap::set_side(Side p_side, const Ref<Image> &p_image) {
 
+	ERR_FAIL_COND(p_image.is_null());
 	ERR_FAIL_COND(p_image->empty());
 	ERR_FAIL_INDEX(p_side, 6);
+
 	if (!_is_valid()) {
 		format = p_image->get_format();
 		w = p_image->get_width();
@@ -1502,6 +1511,7 @@ void CubeMap::set_side(Side p_side, const Ref<Image> &p_image) {
 
 Ref<Image> CubeMap::get_side(Side p_side) const {
 
+	ERR_FAIL_INDEX_V(p_side, 6, Ref<Image>());
 	if (!valid[p_side])
 		return Ref<Image>();
 	return VS::get_singleton()->texture_get_data(cubemap, VS::CubeMapSide(p_side));
@@ -2348,12 +2358,11 @@ RES ResourceFormatLoaderTextureLayered::load(const String &p_path, const String 
 		texarr.instance();
 		lt = texarr;
 	} else {
-		ERR_EXPLAIN("Unrecognized layered texture extension");
-		ERR_FAIL_V(RES());
+		ERR_FAIL_V_MSG(RES(), "Unrecognized layered texture extension.");
 	}
 
 	FileAccess *f = FileAccess::open(p_path, FileAccess::READ);
-	ERR_FAIL_COND_V(!f, RES());
+	ERR_FAIL_COND_V_MSG(!f, RES(), "Cannot open file '" + p_path + "'.");
 
 	uint8_t header[5] = { 0, 0, 0, 0, 0 };
 	f->get_buffer(header, 4);
@@ -2370,8 +2379,7 @@ RES ResourceFormatLoaderTextureLayered::load(const String &p_path, const String 
 		}
 	} else {
 
-		ERR_EXPLAIN("Unrecognized layered texture file format: " + String((const char *)header));
-		ERR_FAIL_V(RES());
+		ERR_FAIL_V_MSG(RES(), "Unrecognized layered texture file format '" + String((const char *)header) + "'.");
 	}
 
 	int tw = f->get_32();
@@ -2498,4 +2506,108 @@ String ResourceFormatLoaderTextureLayered::get_resource_type(const String &p_pat
 	if (p_path.get_extension().to_lower() == "texarr")
 		return "TextureArray";
 	return "";
+}
+
+void CameraTexture::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_camera_feed_id", "feed_id"), &CameraTexture::set_camera_feed_id);
+	ClassDB::bind_method(D_METHOD("get_camera_feed_id"), &CameraTexture::get_camera_feed_id);
+
+	ClassDB::bind_method(D_METHOD("set_which_feed", "which_feed"), &CameraTexture::set_which_feed);
+	ClassDB::bind_method(D_METHOD("get_which_feed"), &CameraTexture::get_which_feed);
+
+	ClassDB::bind_method(D_METHOD("set_camera_active", "active"), &CameraTexture::set_camera_active);
+	ClassDB::bind_method(D_METHOD("get_camera_active"), &CameraTexture::get_camera_active);
+
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "camera_feed_id"), "set_camera_feed_id", "get_camera_feed_id");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "which_feed"), "set_which_feed", "get_which_feed");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "camera_is_active"), "set_camera_active", "get_camera_active");
+}
+
+int CameraTexture::get_width() const {
+	Ref<CameraFeed> feed = CameraServer::get_singleton()->get_feed_by_id(camera_feed_id);
+	if (feed.is_valid()) {
+		return feed->get_base_width();
+	} else {
+		return 0;
+	}
+}
+
+int CameraTexture::get_height() const {
+	Ref<CameraFeed> feed = CameraServer::get_singleton()->get_feed_by_id(camera_feed_id);
+	if (feed.is_valid()) {
+		return feed->get_base_height();
+	} else {
+		return 0;
+	}
+}
+
+bool CameraTexture::has_alpha() const {
+	return false;
+}
+
+RID CameraTexture::get_rid() const {
+	Ref<CameraFeed> feed = CameraServer::get_singleton()->get_feed_by_id(camera_feed_id);
+	if (feed.is_valid()) {
+		return feed->get_texture(which_feed);
+	} else {
+		return RID();
+	}
+}
+
+void CameraTexture::set_flags(uint32_t p_flags) {
+	// not supported
+}
+
+uint32_t CameraTexture::get_flags() const {
+	// not supported
+	return 0;
+}
+
+Ref<Image> CameraTexture::get_data() const {
+	// not (yet) supported
+	return Ref<Image>();
+}
+
+void CameraTexture::set_camera_feed_id(int p_new_id) {
+	camera_feed_id = p_new_id;
+	_change_notify();
+}
+
+int CameraTexture::get_camera_feed_id() const {
+	return camera_feed_id;
+}
+
+void CameraTexture::set_which_feed(CameraServer::FeedImage p_which) {
+	which_feed = p_which;
+	_change_notify();
+}
+
+CameraServer::FeedImage CameraTexture::get_which_feed() const {
+	return which_feed;
+}
+
+void CameraTexture::set_camera_active(bool p_active) {
+	Ref<CameraFeed> feed = CameraServer::get_singleton()->get_feed_by_id(camera_feed_id);
+	if (feed.is_valid()) {
+		feed->set_active(p_active);
+		_change_notify();
+	}
+}
+
+bool CameraTexture::get_camera_active() const {
+	Ref<CameraFeed> feed = CameraServer::get_singleton()->get_feed_by_id(camera_feed_id);
+	if (feed.is_valid()) {
+		return feed->is_active();
+	} else {
+		return false;
+	}
+}
+
+CameraTexture::CameraTexture() {
+	camera_feed_id = 0;
+	which_feed = CameraServer::FEED_RGBA_IMAGE;
+}
+
+CameraTexture::~CameraTexture() {
+	// nothing to do here yet
 }

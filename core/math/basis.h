@@ -28,17 +28,11 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
 /*************************************************************************/
 
-// Circular dependency between Vector3 and Basis :/
-#include "core/math/vector3.h"
-
 #ifndef BASIS_H
 #define BASIS_H
 
 #include "core/math/quat.h"
-
-/**
-	@author Juan Linietsky <reduzio@gmail.com>
-*/
+#include "core/math/vector3.h"
 
 class Basis {
 public:
@@ -153,7 +147,7 @@ public:
 	int get_orthogonal_index() const;
 	void set_orthogonal_index(int p_index);
 
-	void set_diagonal(const Vector3 p_diag);
+	void set_diagonal(const Vector3 &p_diag);
 
 	bool is_orthogonal() const;
 	bool is_diagonal() const;

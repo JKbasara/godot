@@ -119,7 +119,7 @@ Variant PackedDataContainer::_get_at_ofs(uint32_t p_ofs, const uint8_t *p_buf, b
 		if (rerr != OK) {
 
 			err = true;
-			ERR_FAIL_COND_V(err != OK, Variant());
+			ERR_FAIL_COND_V_MSG(err != OK, Variant(), "Error when trying to decode Variant.");
 		}
 		return v;
 	}
@@ -224,7 +224,8 @@ uint32_t PackedDataContainer::_pack(const Variant &p_data, Vector<uint8_t> &tmpd
 
 			string_cache[s] = tmpdata.size();
 
-		}; //fallthrough
+			FALLTHROUGH;
+		};
 		case Variant::NIL:
 		case Variant::BOOL:
 		case Variant::INT:
